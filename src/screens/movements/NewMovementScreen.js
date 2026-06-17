@@ -5,9 +5,10 @@ import {
   KeyboardAvoidingView, Platform, Modal, FlatList,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useFocusEffect } from '@react-navigation/native';
 import { getAllMateriais } from '../../database/materials';
-import { getParceiroPorTipo } from '../../database/partners';
-import { registrarCompra, registrarVenda } from '../../database/transactions';
+import { getAllParceiros } from '../../database/partners';
+import { registrarCompra, registrarVenda, deleteTransacao } from '../../database/transactions';
 import { formatBRL, formatKg } from '../../utils/format';
 
 const C = { primary: '#1B4FD8', success: '#16A34A', danger: '#DC2626', warning: '#D97706', bg: '#F0F4FF', card: '#FFFFFF', text: '#1E293B', sub: '#64748B', border: '#CBD5E1' };
@@ -27,6 +28,9 @@ function SelectModal({ visible, title, data, onSelect, onClose, labelKey = 'nome
                 <Text style={styles.modalItemText}>{item[labelKey]}</Text>
                 {item.quantidade_kg !== undefined && (
                   <Text style={styles.modalItemSub}>{formatKg(item.quantidade_kg)} disponível</Text>
+                )}
+                {item.tipo !== undefined && item.quantidade_kg === undefined && (
+                  <Text style={styles.modalItemSub}>{item.tipo}</Text>
                 )}
               </TouchableOpacity>
             )}
@@ -49,6 +53,41 @@ function parseDateBR(str) {
   const parts = str.replace(/\D/g, '');
   if (parts.length < 8) return null;
   return `${parts.slice(4, 8)}-${parts.slice(2, 4)}-${parts.slice(0, 2)}`;
+}
+
+function formatYMDtoBR(str) {
+  if (!str || str.length < 10) return '';
+  return `${str.slice(8, 10)}/${str.slice(5, 7)}/${str.slice(0, 4)}`;
+}
+
+function buildFromFinanceiro(financeiros) {
+  const formas = { PIX: false, Dinheiro: false, Cheque: false };
+  const config = defaultConfig();
+  const grouped = {};
+  for (const f of financeiros) {
+    if (!grouped[f.forma_pagto]) grouped[f.forma_pagto] = [];
+    grouped[f.forma_pagto].push(f);
+  }
+  for (const forma of ['PIX', 'Dinheiro']) {
+    if (grouped[forma]) {
+      formas[forma] = true;
+      const f = grouped[forma][0];
+      config[forma] = {
+        valor: String(f.valor_parcela),
+        aPrazo: f.status === 'Pendente',
+        dataPrazo: f.status === 'Pendente' ? formatYMDtoBR(f.data_vencimento) : '',
+      };
+    }
+  }
+  if (grouped['Cheque']) {
+    formas.Cheque = true;
+    const cheques = grouped['Cheque'];
+    config.Cheque = {
+      valor: String(cheques.reduce((s, c) => s + c.valor_parcela, 0)),
+      entradas: cheques.map(c => ({ valor: String(c.valor_parcela), data: formatYMDtoBR(c.data_vencimento) })),
+    };
+  }
+  return { formas, config };
 }
 
 function ChequeEntradas({ entradas, onChange }) {
@@ -112,51 +151,79 @@ const defaultConfig = () => ({
 
 export default function NewMovementScreen({ route, navigation }) {
   const tipoInicial = route.params?.tipo || 'Compra';
-  const [tipo, setTipo] = useState(tipoInicial);
+  const editItem = route.params?.editItem || null;
+  const editFinanceiro = route.params?.editFinanceiro || [];
+  const isEditing = !!editItem;
 
+  const [tipo, setTipo] = useState(editItem?.tipo || tipoInicial);
   const [parceiros, setParceiros] = useState([]);
   const [materiais, setMateriais] = useState([]);
   const [parceiro, setParceiro] = useState(null);
   const [material, setMaterial] = useState(null);
   const [pesoKg, setPesoKg] = useState('');
   const [valorKg, setValorKg] = useState('');
-
   const [formas, setFormas] = useState({ PIX: true, Dinheiro: false, Cheque: false });
   const [pagConfig, setPagConfig] = useState(defaultConfig());
-
   const [modalParceiro, setModalParceiro] = useState(false);
   const [modalMaterial, setModalMaterial] = useState(false);
 
-  const carregarDados = useCallback(() => {
-    const tipoParceiro = tipo === 'Compra' ? 'Vendedor' : 'Comprador';
-    setParceiros(getParceiroPorTipo(tipoParceiro));
-    setMateriais(getAllMateriais());
-    setParceiro(null);
-    setMaterial(null);
-    setFormas({ PIX: true, Dinheiro: false, Cheque: false });
-    setPagConfig(defaultConfig());
-  }, [tipo]);
+  // Roda no mount e toda vez que editItem muda (nova edição ou nova transação)
+  useEffect(() => {
+    const allP = getAllParceiros();
+    const allM = getAllMateriais();
+    setParceiros(allP);
+    setMateriais(allM);
+    if (isEditing) {
+      setTipo(editItem.tipo);
+      setParceiro(allP.find(p => p.id === editItem.parceiro_id) || null);
+      setMaterial(allM.find(m => m.id === editItem.material_id) || null);
+      setPesoKg(String(editItem.peso_kg).replace('.', ','));
+      setValorKg(String(editItem.valor_kg).replace('.', ','));
+      const { formas: f, config: c } = buildFromFinanceiro(editFinanceiro);
+      setFormas(f);
+      setPagConfig(c);
+    } else {
+      setTipo(tipoInicial);
+      setParceiro(null);
+      setMaterial(null);
+      setPesoKg('');
+      setValorKg('');
+      setFormas({ PIX: true, Dinheiro: false, Cheque: false });
+      setPagConfig(defaultConfig());
+    }
+  }, [editItem?.id]); // eslint-disable-line
 
-  useEffect(() => { carregarDados(); }, [carregarDados]);
+  // Só atualiza as listas ao ganhar foco — nunca toca no estado do form
+  useFocusEffect(
+    useCallback(() => {
+      setMateriais(getAllMateriais());
+      setParceiros(getAllParceiros());
+    }, [])
+  );
+
+  // Material com estoque atualizado derivado da lista fresca
+  const materialAtual = material ? materiais.find(m => m.id === material.id) || material : null;
+
+  function onChangeTipo(novoTipo) {
+    setTipo(novoTipo);
+    if (!isEditing) {
+      setParceiro(null);
+      setMaterial(null);
+      setFormas({ PIX: true, Dinheiro: false, Cheque: false });
+      setPagConfig(defaultConfig());
+    }
+  }
 
   const peso = parseFloat(pesoKg.replace(',', '.')) || 0;
   const vkg = parseFloat(valorKg.replace(',', '.')) || 0;
   const valorTotal = peso * vkg;
-  const estoqueInsuficiente = tipo === 'Venda' && material && peso > 0 && peso > material.quantidade_kg;
+  const estoqueInsuficiente = tipo === 'Venda' && materialAtual && peso > 0 && peso > materialAtual.quantidade_kg;
 
   const formasAtivas = ['PIX', 'Dinheiro', 'Cheque'].filter(f => formas[f]);
   const soloForma = formasAtivas.length === 1;
 
   function updateConfig(forma, field, value) {
     setPagConfig(prev => ({ ...prev, [forma]: { ...prev[forma], [field]: value } }));
-  }
-
-  function getValorForma(f) {
-    if (soloForma) return valorTotal;
-    if (f === 'Cheque') {
-      return pagConfig.Cheque.entradas.reduce((s, p) => s + (parseFloat(p.valor.replace(',', '.')) || 0), 0);
-    }
-    return parseFloat(pagConfig[f].valor.replace(',', '.')) || 0;
   }
 
   const totalCoberto = soloForma
@@ -253,7 +320,7 @@ export default function NewMovementScreen({ route, navigation }) {
     if (peso <= 0) { Alert.alert('Atenção', 'Informe o peso em kg.'); return; }
     if (vkg <= 0) { Alert.alert('Atenção', 'Informe o valor por kg.'); return; }
     if (estoqueInsuficiente) {
-      Alert.alert('⚠️ Estoque Insuficiente', `Você possui apenas ${formatKg(material.quantidade_kg)} de ${material.nome_material} disponível.`);
+      Alert.alert('⚠️ Estoque Insuficiente', `Você possui apenas ${formatKg(materialAtual?.quantidade_kg ?? 0)} de ${materialAtual?.nome_material} disponível.`);
       return;
     }
     if (!validar()) return;
@@ -267,12 +334,21 @@ export default function NewMovementScreen({ route, navigation }) {
         pagamentos: buildPagamentos(),
       };
 
+      if (isEditing) deleteTransacao(editItem.id);
       if (tipo === 'Compra') registrarCompra(params);
       else registrarVenda(params);
 
-      Alert.alert('Sucesso!', `${tipo} registrada com sucesso.`, [
-        { text: 'OK', onPress: () => navigation.goBack() },
-      ]);
+      if (isEditing) {
+        navigation.goBack();
+      } else {
+        setParceiro(null);
+        setMaterial(null);
+        setPesoKg('');
+        setValorKg('');
+        setFormas({ PIX: true, Dinheiro: false, Cheque: false });
+        setPagConfig(defaultConfig());
+        Alert.alert('Sucesso!', `${tipo} registrada com sucesso.`);
+      }
     } catch (e) {
       if (e.message?.startsWith('ESTOQUE_INSUFICIENTE')) {
         const disp = parseFloat(e.message.split(':')[1]);
@@ -339,8 +415,8 @@ export default function NewMovementScreen({ route, navigation }) {
 
   return (
     <SafeAreaView style={styles.safe}>
-      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-        <ScrollView style={styles.container} contentContainerStyle={{ paddingBottom: 40 }}>
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+        <ScrollView style={styles.container} contentContainerStyle={{ paddingBottom: 120 }} keyboardShouldPersistTaps="handled">
 
           <View style={styles.field}>
             <Text style={styles.label}>Tipo de Movimentação</Text>
@@ -349,7 +425,7 @@ export default function NewMovementScreen({ route, navigation }) {
                 <TouchableOpacity
                   key={t}
                   style={[styles.segBtn, tipo === t && (t === 'Compra' ? styles.segBtnCompra : styles.segBtnVenda)]}
-                  onPress={() => setTipo(t)}
+                  onPress={() => onChangeTipo(t)}
                 >
                   <Text style={[styles.segText, tipo === t && styles.segTextActive]}>
                     {t === 'Compra' ? '📥 Compra' : '📤 Venda'}
@@ -360,10 +436,10 @@ export default function NewMovementScreen({ route, navigation }) {
           </View>
 
           <View style={styles.field}>
-            <Text style={styles.label}>{tipo === 'Compra' ? 'Vendedor (Fornecedor)' : 'Comprador (Cliente)'}</Text>
+            <Text style={styles.label}>{tipo === 'Compra' ? 'Fornecedor / Parceiro' : 'Cliente / Parceiro'}</Text>
             <TouchableOpacity style={styles.selectBtn} onPress={() => setModalParceiro(true)}>
               <Text style={parceiro ? styles.selectText : styles.selectPlaceholder}>
-                {parceiro ? parceiro.nome : `Selecionar ${tipo === 'Compra' ? 'fornecedor' : 'cliente'}...`}
+                {parceiro ? parceiro.nome : 'Selecionar parceiro...'}
               </Text>
               <Text style={styles.selectArrow}>▼</Text>
             </TouchableOpacity>
@@ -372,8 +448,8 @@ export default function NewMovementScreen({ route, navigation }) {
           <View style={styles.field}>
             <Text style={styles.label}>Material</Text>
             <TouchableOpacity style={styles.selectBtn} onPress={() => setModalMaterial(true)}>
-              <Text style={material ? styles.selectText : styles.selectPlaceholder}>
-                {material ? `${material.nome_material} (${formatKg(material.quantidade_kg)})` : 'Selecionar material...'}
+              <Text style={materialAtual ? styles.selectText : styles.selectPlaceholder}>
+                {materialAtual ? `${materialAtual.nome_material} (${formatKg(materialAtual.quantidade_kg)})` : 'Selecionar material...'}
               </Text>
               <Text style={styles.selectArrow}>▼</Text>
             </TouchableOpacity>
@@ -407,7 +483,7 @@ export default function NewMovementScreen({ route, navigation }) {
 
           {estoqueInsuficiente && (
             <View style={styles.errorBox}>
-              <Text style={styles.errorText}>⚠️ Estoque insuficiente! Disponível: {formatKg(material.quantidade_kg)}</Text>
+              <Text style={styles.errorText}>⚠️ Estoque insuficiente! Disponível: {formatKg(materialAtual?.quantidade_kg ?? 0)}</Text>
             </View>
           )}
 
@@ -419,7 +495,6 @@ export default function NewMovementScreen({ route, navigation }) {
             </View>
           )}
 
-          {/* Seletor de formas de pagamento */}
           <View style={styles.field}>
             <Text style={styles.label}>Forma de Pagamento</Text>
             <View style={styles.pagtoGrid}>
@@ -450,7 +525,6 @@ export default function NewMovementScreen({ route, navigation }) {
             )}
           </View>
 
-          {/* Config de cada forma ativa */}
           {formas.PIX && renderPIXDinheiro('PIX')}
           {formas.Dinheiro && renderPIXDinheiro('Dinheiro')}
 
@@ -501,13 +575,13 @@ export default function NewMovementScreen({ route, navigation }) {
             disabled={estoqueInsuficiente}
           >
             <Text style={styles.btnSalvarText}>
-              {tipo === 'Compra' ? '💾 Registrar Compra' : '💾 Registrar Venda'}
+              {isEditing ? '💾 Salvar Edição' : (tipo === 'Compra' ? '💾 Registrar Compra' : '💾 Registrar Venda')}
             </Text>
           </TouchableOpacity>
         </ScrollView>
       </KeyboardAvoidingView>
 
-      <SelectModal visible={modalParceiro} title={tipo === 'Compra' ? 'Selecionar Fornecedor' : 'Selecionar Cliente'} data={parceiros} onSelect={setParceiro} onClose={() => setModalParceiro(false)} labelKey="nome" />
+      <SelectModal visible={modalParceiro} title="Selecionar Parceiro" data={parceiros} onSelect={setParceiro} onClose={() => setModalParceiro(false)} labelKey="nome" />
       <SelectModal visible={modalMaterial} title="Selecionar Material" data={materiais} onSelect={setMaterial} onClose={() => setModalMaterial(false)} labelKey="nome_material" />
     </SafeAreaView>
   );

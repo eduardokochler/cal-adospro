@@ -10,7 +10,6 @@ const C = { primary: '#1B4FD8', bg: '#F0F4FF', card: '#FFFFFF', text: '#1E293B',
 export default function AddPartnerScreen({ route, navigation }) {
   const editando = route.params?.parceiro;
   const [nome, setNome] = useState(editando?.nome || '');
-  const [tipo, setTipo] = useState(editando?.tipo || 'Comprador');
   const [telefone, setTelefone] = useState(editando?.telefone || '');
 
   function salvar() {
@@ -19,17 +18,17 @@ export default function AddPartnerScreen({ route, navigation }) {
       return;
     }
     if (editando) {
-      updateParceiro(editando.id, nome.trim(), tipo, telefone.trim());
+      updateParceiro(editando.id, nome.trim(), telefone.trim());
     } else {
-      addParceiro(nome.trim(), tipo, telefone.trim());
+      addParceiro(nome.trim(), telefone.trim());
     }
     navigation.goBack();
   }
 
   return (
     <SafeAreaView style={styles.safe}>
-      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-        <ScrollView style={styles.container} contentContainerStyle={{ paddingBottom: 40 }}>
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+        <ScrollView style={styles.container} contentContainerStyle={{ paddingBottom: 40 }} keyboardShouldPersistTaps="handled">
 
           <View style={styles.field}>
             <Text style={styles.label}>Nome *</Text>
@@ -37,29 +36,9 @@ export default function AddPartnerScreen({ route, navigation }) {
               style={styles.input}
               value={nome}
               onChangeText={setNome}
-              placeholder="Ex: Fábrica São Paulo"
+              placeholder="Ex: João Silva"
               placeholderTextColor={C.sub}
             />
-          </View>
-
-          <View style={styles.field}>
-            <Text style={styles.label}>Tipo *</Text>
-            <View style={styles.segmented}>
-              {['Comprador', 'Vendedor'].map((t) => (
-                <TouchableOpacity
-                  key={t}
-                  style={[styles.segBtn, tipo === t && styles.segBtnActive]}
-                  onPress={() => setTipo(t)}
-                >
-                  <Text style={[styles.segText, tipo === t && styles.segTextActive]}>
-                    {t === 'Comprador' ? '🏭 Comprador' : '🏪 Vendedor'}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-            <Text style={styles.hint}>
-              {tipo === 'Comprador' ? 'Fábricas de calçados que compram de você.' : 'Fornecedores que vendem matéria-prima para você.'}
-            </Text>
           </View>
 
           <View style={styles.field}>
@@ -89,12 +68,6 @@ const styles = StyleSheet.create({
   field: { marginBottom: 20 },
   label: { fontSize: 13, fontWeight: '700', color: C.sub, marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.5 },
   input: { backgroundColor: C.card, borderRadius: 10, borderWidth: 1, borderColor: C.border, padding: 14, fontSize: 15, color: C.text },
-  segmented: { flexDirection: 'row', gap: 10 },
-  segBtn: { flex: 1, padding: 12, borderRadius: 10, backgroundColor: C.card, borderWidth: 1, borderColor: C.border, alignItems: 'center' },
-  segBtnActive: { backgroundColor: C.primary, borderColor: C.primary },
-  segText: { fontSize: 14, fontWeight: '600', color: C.sub },
-  segTextActive: { color: '#fff' },
-  hint: { fontSize: 12, color: C.sub, marginTop: 8, fontStyle: 'italic' },
   btnSalvar: { backgroundColor: C.primary, borderRadius: 12, padding: 16, alignItems: 'center', marginTop: 8 },
   btnSalvarText: { color: '#fff', fontSize: 16, fontWeight: '800' },
 });

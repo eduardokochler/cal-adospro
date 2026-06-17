@@ -4,21 +4,17 @@ export function getAllParceiros() {
   return getDb().getAllSync('SELECT * FROM parceiros ORDER BY nome ASC');
 }
 
-export function getParceiroPorTipo(tipo) {
-  return getDb().getAllSync('SELECT * FROM parceiros WHERE tipo = ? ORDER BY nome ASC', [tipo]);
-}
-
-export function addParceiro(nome, tipo, telefone) {
+export function addParceiro(nome, telefone) {
   return getDb().runSync(
     'INSERT INTO parceiros (nome, tipo, telefone) VALUES (?, ?, ?)',
-    [nome, tipo, telefone || null]
+    [nome, 'Parceiro', telefone || null]
   );
 }
 
-export function updateParceiro(id, nome, tipo, telefone) {
+export function updateParceiro(id, nome, telefone) {
   getDb().runSync(
-    'UPDATE parceiros SET nome = ?, tipo = ?, telefone = ? WHERE id = ?',
-    [nome, tipo, telefone || null, id]
+    'UPDATE parceiros SET nome = ?, telefone = ? WHERE id = ?',
+    [nome, telefone || null, id]
   );
 }
 

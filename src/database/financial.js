@@ -66,6 +66,52 @@ export function confirmarPagamento(id) {
   }
 }
 
+export function registrarPagamentoParcial(id, valorParcial) {
+  const db = getDb();
+  const f = db.getFirstSync('SELECT * FROM financeiro WHERE id = ? AND status = ?', [id, 'Pendente']);
+  if (!f) return;
+  const original = f.valor_parcela;
+  const restante = parseFloat((original - valorParcial).toFixed(2));
+  const hoje = new Date().toISOString().split('T')[0];
+  const hojeFormatado = hoje.slice(8, 10) + '/' + hoje.slice(5, 7) + '/' + hoje.slice(0, 4);
+
+  // Formatar valores para descrição
+  function fmt(v) { return 'R$ ' + v.toFixed(2).replace('.', ',').replace(/\B(?=(\d{3})+(?!\d))/g, '.'); }
+
+  // Atualiza o registro pendente: reduz valor e anota o histórico
+  db.runSync(
+    'UPDATE financeiro SET valor_parcela = ?, descricao = ? WHERE id = ?',
+    [restante, `Restante (original ${fmt(original)}, antecipou ${fmt(valorParcial)} em ${hojeFormatado})`, id]
+  );
+
+  // Cria registro compensado para o valor antecipado
+  db.runSync(
+    'INSERT INTO financeiro (transacao_id, tipo_fluxo, forma_pagto, valor_parcela, data_vencimento, status, descricao) VALUES (?,?,?,?,?,?,?)',
+    [f.transacao_id, f.tipo_fluxo, f.forma_pagto, valorParcial, hoje, 'Compensado',
+      `Antecipação em ${hojeFormatado} (original ${fmt(original)})`]
+  );
+
+  if (f.tipo_fluxo === 'Entrada') {
+    db.runSync('UPDATE saldo_caixa SET saldo = saldo + ? WHERE id = 1', [valorParcial]);
+  } else {
+    db.runSync('UPDATE saldo_caixa SET saldo = saldo - ? WHERE id = 1', [valorParcial]);
+  }
+}
+
+export function deleteFinanceiroAvulso(id) {
+  const db = getDb();
+  const f = db.getFirstSync('SELECT * FROM financeiro WHERE id = ? AND transacao_id IS NULL', [id]);
+  if (!f) return;
+  if (f.status === 'Compensado') {
+    if (f.tipo_fluxo === 'Entrada') {
+      db.runSync('UPDATE saldo_caixa SET saldo = saldo - ? WHERE id = 1', [f.valor_parcela]);
+    } else {
+      db.runSync('UPDATE saldo_caixa SET saldo = saldo + ? WHERE id = 1', [f.valor_parcela]);
+    }
+  }
+  db.runSync('DELETE FROM financeiro WHERE id = ?', [id]);
+}
+
 export function getResumoFinanceiro() {
   const db = getDb();
   const saldo = getSaldoCaixa();

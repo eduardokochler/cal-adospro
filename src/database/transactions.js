@@ -3,7 +3,9 @@ import { updateEstoque } from './materials';
 
 export function getAllTransacoes() {
   return getDb().getAllSync(`
-    SELECT t.*, p.nome AS parceiro_nome, m.nome_material
+    SELECT t.*, p.nome AS parceiro_nome, m.nome_material,
+      COALESCE((SELECT SUM(f.valor_parcela) FROM financeiro f WHERE f.transacao_id = t.id AND f.status = 'Compensado'), 0) AS valor_pago,
+      COALESCE((SELECT SUM(f.valor_parcela) FROM financeiro f WHERE f.transacao_id = t.id AND f.status = 'Pendente'), 0) AS valor_pendente
     FROM transacoes t
     JOIN parceiros p ON t.parceiro_id = p.id
     JOIN materiais m ON t.material_id = m.id
@@ -11,9 +13,28 @@ export function getAllTransacoes() {
   `);
 }
 
+export function getFinanceiroByTransacao(id) {
+  return getDb().getAllSync(
+    'SELECT * FROM financeiro WHERE transacao_id = ? ORDER BY parcela_num ASC',
+    [id]
+  );
+}
+
+export function getTransacaoById(id) {
+  return getDb().getFirstSync(`
+    SELECT t.*, p.nome AS parceiro_nome, m.nome_material
+    FROM transacoes t
+    JOIN parceiros p ON t.parceiro_id = p.id
+    JOIN materiais m ON t.material_id = m.id
+    WHERE t.id = ?
+  `, [id]);
+}
+
 export function getTransacoesPorParceiro(parceiro_id) {
   return getDb().getAllSync(`
-    SELECT t.*, p.nome AS parceiro_nome, m.nome_material
+    SELECT t.*, p.nome AS parceiro_nome, m.nome_material,
+      COALESCE((SELECT SUM(f.valor_parcela) FROM financeiro f WHERE f.transacao_id = t.id AND f.status = 'Compensado'), 0) AS valor_pago,
+      COALESCE((SELECT SUM(f.valor_parcela) FROM financeiro f WHERE f.transacao_id = t.id AND f.status = 'Pendente'), 0) AS valor_pendente
     FROM transacoes t
     JOIN parceiros p ON t.parceiro_id = p.id
     JOIN materiais m ON t.material_id = m.id
@@ -71,6 +92,34 @@ function inserirPagamento(db, transacao_id, tipoFluxo, pag, data) {
   } else if (forma === 'Cheque') {
     inserirCheques(db, transacao_id, tipoFluxo, valor, parcelasCustom, parcelas, intervaloDias);
   }
+}
+
+export function deleteTransacao(id) {
+  const db = getDb();
+  const t = db.getFirstSync('SELECT * FROM transacoes WHERE id = ?', [id]);
+  if (!t) return;
+
+  // Reverter saldo_caixa para registros já compensados
+  const financeiros = db.getAllSync('SELECT * FROM financeiro WHERE transacao_id = ?', [id]);
+  for (const f of financeiros) {
+    if (f.status === 'Compensado') {
+      if (f.tipo_fluxo === 'Entrada') {
+        db.runSync('UPDATE saldo_caixa SET saldo = saldo - ? WHERE id = 1', [f.valor_parcela]);
+      } else {
+        db.runSync('UPDATE saldo_caixa SET saldo = saldo + ? WHERE id = 1', [f.valor_parcela]);
+      }
+    }
+  }
+
+  // Reverter estoque
+  if (t.tipo === 'Compra') {
+    db.runSync('UPDATE materiais SET quantidade_kg = quantidade_kg - ? WHERE id = ?', [t.peso_kg, t.material_id]);
+  } else {
+    db.runSync('UPDATE materiais SET quantidade_kg = quantidade_kg + ? WHERE id = ?', [t.peso_kg, t.material_id]);
+  }
+
+  db.runSync('DELETE FROM financeiro WHERE transacao_id = ?', [id]);
+  db.runSync('DELETE FROM transacoes WHERE id = ?', [id]);
 }
 
 export function registrarCompra({ parceiro_id, material_id, peso_kg, valor_kg, pagamentos }) {

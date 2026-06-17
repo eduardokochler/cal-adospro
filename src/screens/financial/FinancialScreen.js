@@ -8,7 +8,9 @@ import { useFocusEffect } from '@react-navigation/native';
 import {
   getAllFinanceiro, compensarCheque, depositarCheque,
   confirmarPagamento, lancamentoAvulso, getResumoFinanceiro,
+  deleteFinanceiroAvulso, registrarPagamentoParcial,
 } from '../../database/financial';
+import { deleteTransacao, getFinanceiroByTransacao, getTransacaoById } from '../../database/transactions';
 import { formatBRL, formatDate, todayISO } from '../../utils/format';
 
 const C = { primary: '#1B4FD8', success: '#16A34A', danger: '#DC2626', warning: '#D97706', bg: '#F0F4FF', card: '#FFFFFF', text: '#1E293B', sub: '#64748B' };
@@ -29,12 +31,15 @@ function StatusBadge({ status, vencimento }) {
 
 const AVULSO_EMPTY = { tipo: 'Entrada', descricao: '', valor: '', forma: 'PIX', venc: '', aPrazo: false };
 
-export default function FinancialScreen() {
+export default function FinancialScreen({ navigation }) {
   const [lancamentos, setLancamentos] = useState([]);
   const [resumo, setResumo] = useState({ saldo: 0, aReceber: 0, aPagar: 0, vencidosHoje: 0, chequesEmCompensacao: 0 });
   const [filtro, setFiltro] = useState('Todos');
   const [modal, setModal] = useState(false);
   const [avulso, setAvulso] = useState(AVULSO_EMPTY);
+  const [modalParcial, setModalParcial] = useState(false);
+  const [parcialItem, setParcialItem] = useState(null);
+  const [valorParcial, setValorParcial] = useState('');
 
   const carregar = useCallback(() => {
     setLancamentos(getAllFinanceiro());
@@ -80,6 +85,59 @@ export default function FinancialScreen() {
     );
   }
 
+  function abrirParcial(item) {
+    setParcialItem(item);
+    setValorParcial('');
+    setModalParcial(true);
+  }
+
+  function confirmarParcial() {
+    const v = parseFloat(valorParcial.replace(',', '.'));
+    if (!v || v <= 0) { Alert.alert('Atenção', 'Informe um valor válido.'); return; }
+    if (v >= parcialItem.valor_parcela) {
+      Alert.alert('Atenção', `O valor deve ser menor que o total pendente (${formatBRL(parcialItem.valor_parcela)}).\n\nPara quitar totalmente, use o botão de confirmar recebimento.`);
+      return;
+    }
+    registrarPagamentoParcial(parcialItem.id, v);
+    setModalParcial(false);
+    setParcialItem(null);
+    setValorParcial('');
+    carregar();
+  }
+
+  function handleEdit(item) {
+    const transacao = getTransacaoById(item.transacao_id);
+    if (!transacao) return;
+    const financeiros = getFinanceiroByTransacao(item.transacao_id);
+    navigation.navigate('Movimentações', {
+      screen: 'NovaMovimentacao',
+      params: { editItem: transacao, editFinanceiro: financeiros },
+    });
+  }
+
+  function handleDelete(item) {
+    if (item.transacao_id) {
+      const tipo = item.transacao_tipo === 'Venda' ? 'venda' : 'compra';
+      Alert.alert(
+        'Apagar Transação',
+        `Apagar esta ${tipo} de ${formatBRL(item.valor_parcela)}?\n\nTodos os lançamentos vinculados e o estoque serão revertidos.`,
+        [
+          { text: 'Cancelar', style: 'cancel' },
+          { text: 'Apagar', style: 'destructive', onPress: () => { deleteTransacao(item.transacao_id); carregar(); } },
+        ]
+      );
+    } else {
+      Alert.alert(
+        'Apagar Lançamento',
+        `Apagar este lançamento de ${formatBRL(item.valor_parcela)}?`,
+        [
+          { text: 'Cancelar', style: 'cancel' },
+          { text: 'Apagar', style: 'destructive', onPress: () => { deleteFinanceiroAvulso(item.id); carregar(); } },
+        ]
+      );
+    }
+  }
+
   function salvarAvulso() {
     const valor = parseFloat(avulso.valor.replace(',', '.'));
     if (!avulso.descricao.trim()) { Alert.alert('Atenção', 'Informe uma descrição.'); return; }
@@ -110,6 +168,7 @@ export default function FinancialScreen() {
     const hoje = todayISO();
     const vencido = item.status === 'Pendente' && item.data_vencimento && item.data_vencimento < hoje;
     const nomeExibido = item.parceiro_nome || item.descricao || 'Lançamento';
+    const isAvulso = !item.transacao_id;
 
     return (
       <View style={[styles.card, vencido && styles.cardVencido]}>
@@ -150,6 +209,22 @@ export default function FinancialScreen() {
             <Text style={styles.btnCompensarText}>{isEntrada ? '✓ Confirmar Recebimento' : '✓ Confirmar Pagamento'}</Text>
           </TouchableOpacity>
         )}
+
+        <View style={styles.cardActions}>
+          {!isAvulso && (
+            <TouchableOpacity style={styles.btnEditar} onPress={() => handleEdit(item)}>
+              <Text style={styles.btnEditarText}>✏️ Editar</Text>
+            </TouchableOpacity>
+          )}
+          {item.status === 'Pendente' && (
+            <TouchableOpacity style={styles.btnAntecipacao} onPress={() => abrirParcial(item)}>
+              <Text style={styles.btnAntecipacaoText}>💸 Antecipar</Text>
+            </TouchableOpacity>
+          )}
+          <TouchableOpacity style={styles.btnApagar} onPress={() => handleDelete(item)}>
+            <Text style={styles.btnApagarText}>🗑️ Apagar</Text>
+          </TouchableOpacity>
+        </View>
       </View>
     );
   }
@@ -206,6 +281,53 @@ export default function FinancialScreen() {
           <Text style={styles.fabText}>+</Text>
         </TouchableOpacity>
       </View>
+
+      {/* Modal pagamento antecipado */}
+      <Modal visible={modalParcial} animationType="slide" transparent onRequestClose={() => setModalParcial(false)}>
+        <KeyboardAvoidingView style={styles.modalOverlay} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+          <View style={styles.modalSheet}>
+            <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+              <View style={styles.modalHeader}>
+                <Text style={styles.modalTitle}>💸 Pagamento Antecipado</Text>
+                <TouchableOpacity onPress={() => setModalParcial(false)}>
+                  <Text style={styles.modalClose}>✕</Text>
+                </TouchableOpacity>
+              </View>
+              {parcialItem && (
+                <View style={styles.parcialInfo}>
+                  <Text style={styles.parcialInfoLabel}>Valor total pendente</Text>
+                  <Text style={styles.parcialInfoValor}>{formatBRL(parcialItem.valor_parcela)}</Text>
+                  {parcialItem.parceiro_nome ? (
+                    <Text style={styles.parcialInfoSub}>{parcialItem.parceiro_nome} · {parcialItem.forma_pagto}</Text>
+                  ) : (
+                    <Text style={styles.parcialInfoSub}>{parcialItem.descricao} · {parcialItem.forma_pagto}</Text>
+                  )}
+                </View>
+              )}
+              <Text style={styles.label}>Valor antecipado (R$)</Text>
+              <TextInput
+                style={styles.input}
+                placeholder="0,00"
+                keyboardType="decimal-pad"
+                value={valorParcial}
+                onChangeText={setValorParcial}
+                autoFocus
+              />
+              {parcialItem && valorParcial ? (
+                <View style={styles.parcialRestanteBox}>
+                  <Text style={styles.parcialRestanteLabel}>Ficará pendente:</Text>
+                  <Text style={styles.parcialRestanteValor}>
+                    {formatBRL(Math.max(0, parcialItem.valor_parcela - (parseFloat(valorParcial.replace(',', '.')) || 0)))}
+                  </Text>
+                </View>
+              ) : null}
+              <TouchableOpacity style={styles.btnSalvar} onPress={confirmarParcial}>
+                <Text style={styles.btnSalvarText}>Confirmar Antecipação</Text>
+              </TouchableOpacity>
+            </ScrollView>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
 
       {/* Modal lançamento avulso */}
       <Modal visible={modal} animationType="slide" transparent onRequestClose={() => setModal(false)}>
@@ -350,6 +472,20 @@ const styles = StyleSheet.create({
   statusText: { fontSize: 11, fontWeight: '700' },
   btnCompensar: { borderRadius: 8, padding: 10, alignItems: 'center', marginTop: 10 },
   btnCompensarText: { color: '#fff', fontSize: 13, fontWeight: '700' },
+  cardActions: { flexDirection: 'row', marginTop: 8, gap: 8 },
+  btnEditar: { flex: 1, backgroundColor: '#F0FDF4', borderRadius: 8, paddingVertical: 7, alignItems: 'center' },
+  btnEditarText: { fontSize: 12, fontWeight: '600', color: C.success },
+  btnAntecipacao: { flex: 1, backgroundColor: '#FFFBEB', borderRadius: 8, paddingVertical: 7, alignItems: 'center' },
+  btnAntecipacaoText: { fontSize: 12, fontWeight: '600', color: C.warning },
+  btnApagar: { flex: 1, backgroundColor: '#FEF2F2', borderRadius: 8, paddingVertical: 7, alignItems: 'center' },
+  btnApagarText: { fontSize: 12, fontWeight: '600', color: C.danger },
+  parcialInfo: { backgroundColor: '#F8FAFC', borderRadius: 12, padding: 14, marginBottom: 4, borderWidth: 1, borderColor: '#E2E8F0' },
+  parcialInfoLabel: { fontSize: 11, color: C.sub, fontWeight: '600', textTransform: 'uppercase' },
+  parcialInfoValor: { fontSize: 26, fontWeight: '900', color: C.text, marginTop: 2 },
+  parcialInfoSub: { fontSize: 13, color: C.sub, marginTop: 4 },
+  parcialRestanteBox: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#FFFBEB', borderRadius: 10, padding: 12, marginTop: 10, borderWidth: 1, borderColor: '#FDE68A' },
+  parcialRestanteLabel: { fontSize: 13, color: C.warning, fontWeight: '600' },
+  parcialRestanteValor: { fontSize: 16, fontWeight: '800', color: C.warning },
   empty: { alignItems: 'center', marginTop: 60 },
   emptyEmoji: { fontSize: 48, marginBottom: 12 },
   emptyText: { fontSize: 16, fontWeight: '700', color: C.text },

@@ -1,10 +1,10 @@
 import React, { useCallback, useState } from 'react';
 import {
   View, Text, FlatList, TouchableOpacity,
-  StyleSheet, SafeAreaView, ScrollView,
+  StyleSheet, SafeAreaView, ScrollView, Alert,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
-import { getAllTransacoes } from '../../database/transactions';
+import { getAllTransacoes, deleteTransacao, getFinanceiroByTransacao } from '../../database/transactions';
 import { formatBRL, formatKg, formatDate } from '../../utils/format';
 import { compartilharRecibo } from '../../utils/receipt';
 
@@ -41,6 +41,25 @@ export default function MovementsScreen({ navigation }) {
   const carregar = useCallback(() => { setTransacoes(getAllTransacoes()); }, []);
   useFocusEffect(carregar);
 
+  function handleEdit(item) {
+    const financeiros = getFinanceiroByTransacao(item.id);
+    navigation.navigate('NovaMovimentacao', { editItem: item, editFinanceiro: financeiros });
+  }
+
+  function handleDelete(item) {
+    Alert.alert(
+      'Apagar movimentação?',
+      `${item.tipo} de ${formatBRL(item.valor_total)} com ${item.parceiro_nome} será apagada. O estoque e saldo serão revertidos.`,
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Apagar', style: 'destructive',
+          onPress: () => { deleteTransacao(item.id); carregar(); },
+        },
+      ]
+    );
+  }
+
   const range = getPeriodRange(periodo);
   const periodFiltered = range
     ? transacoes.filter((t) => t.data >= range.inicio && t.data <= range.fim)
@@ -73,9 +92,29 @@ export default function MovementsScreen({ navigation }) {
             </View>
           </View>
         </View>
-        <TouchableOpacity style={styles.btnRecibo} onPress={() => compartilharRecibo(item)}>
-          <Text style={styles.btnReciboText}>📤 Compartilhar Recibo</Text>
-        </TouchableOpacity>
+        {item.valor_pendente > 0 && (
+          <View style={styles.pagRow}>
+            {item.valor_pago > 0 && (
+              <View style={styles.pagChip}>
+                <Text style={styles.pagChipPago}>✓ Pago {formatBRL(item.valor_pago)}</Text>
+              </View>
+            )}
+            <View style={styles.pagChip}>
+              <Text style={styles.pagChipPendente}>⏳ Pendente {formatBRL(item.valor_pendente)}</Text>
+            </View>
+          </View>
+        )}
+        <View style={styles.cardActions}>
+          <TouchableOpacity style={styles.btnRecibo} onPress={() => compartilharRecibo(item)}>
+            <Text style={styles.btnReciboText}>📤 Recibo</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.btnEditar} onPress={() => handleEdit(item)}>
+            <Text style={styles.btnEditarText}>✏️</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.btnApagar} onPress={() => handleDelete(item)}>
+            <Text style={styles.btnApagarText}>🗑️</Text>
+          </TouchableOpacity>
+        </View>
       </View>
     );
   }
@@ -158,8 +197,13 @@ const styles = StyleSheet.create({
   periodoTextActive: { color: '#fff' },
   card: { backgroundColor: C.card, marginHorizontal: 12, marginBottom: 10, borderRadius: 12, padding: 14, elevation: 2, shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 4, shadowOffset: { width: 0, height: 2 } },
   cardMain: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  btnRecibo: { marginTop: 10, borderTopWidth: 1, borderTopColor: '#F1F5F9', paddingTop: 8, alignItems: 'center' },
+  cardActions: { flexDirection: 'row', marginTop: 10, borderTopWidth: 1, borderTopColor: '#F1F5F9', paddingTop: 8, alignItems: 'center' },
+  btnRecibo: { flex: 1, alignItems: 'center' },
   btnReciboText: { fontSize: 13, fontWeight: '600', color: C.primary },
+  btnEditar: { paddingHorizontal: 12, paddingVertical: 4, borderLeftWidth: 1, borderLeftColor: '#F1F5F9' },
+  btnEditarText: { fontSize: 18 },
+  btnApagar: { paddingHorizontal: 12, paddingVertical: 4, borderLeftWidth: 1, borderLeftColor: '#F1F5F9' },
+  btnApagarText: { fontSize: 18 },
   badge: { width: 44, height: 44, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
   cardName: { fontSize: 14, fontWeight: '700', color: C.text },
   cardSub: { fontSize: 12, color: C.sub, marginTop: 2 },
@@ -171,6 +215,10 @@ const styles = StyleSheet.create({
   emptyEmoji: { fontSize: 48, marginBottom: 12 },
   emptyText: { fontSize: 16, fontWeight: '700', color: C.text },
   emptySub: { fontSize: 13, color: C.sub, marginTop: 4 },
+  pagRow: { flexDirection: 'row', gap: 8, marginTop: 10, flexWrap: 'wrap' },
+  pagChip: { flexDirection: 'row', alignItems: 'center' },
+  pagChipPago: { fontSize: 12, fontWeight: '700', color: '#16A34A' },
+  pagChipPendente: { fontSize: 12, fontWeight: '700', color: '#D97706' },
   fab: { position: 'absolute', bottom: 20, right: 20, width: 56, height: 56, borderRadius: 28, backgroundColor: C.primary, alignItems: 'center', justifyContent: 'center', elevation: 6, shadowColor: C.primary, shadowOpacity: 0.4, shadowRadius: 8, shadowOffset: { width: 0, height: 4 } },
   fabText: { fontSize: 28, color: '#fff', lineHeight: 32 },
 });

@@ -1,29 +1,42 @@
 import { Share } from 'react-native';
 import { formatBRL, formatKg, formatDate } from './format';
+import { getFinanceiroByTransacao } from '../database/transactions';
 
-export function gerarTextoRecibo(t) {
-  const tipo = t.tipo === 'Compra' ? 'COMPRA' : 'VENDA';
-  const emoji = t.tipo === 'Compra' ? '📥' : '📤';
+function linhaVencimento(financeiros) {
+  const prazo = financeiros.find(f => f.status === 'Pendente');
+  if (!prazo) return [];
+  return [`📅 Vencimento:   ${formatDate(prazo.data_vencimento)}`];
+}
 
-  return [
+export function gerarTextoRecibo(t, financeiros) {
+  const isVenda = t.tipo === 'Venda';
+  const tipo = isVenda ? 'VENDA' : 'COMPRA';
+  const emoji = isVenda ? '📤' : '📥';
+  const parceiroLabel = isVenda ? 'Cliente' : 'Fornecedor';
+
+  const linhas = [
     '━━━━━━━━━━━━━━━━━━━━',
     `${emoji}  RECIBO DE ${tipo}`,
     '━━━━━━━━━━━━━━━━━━━━',
-    `📅 Data:       ${formatDate(t.data)}`,
-    `👤 Comprador:  ${t.parceiro_nome}`,
-    `📦 Material:   ${t.nome_material}`,
-    `⚖️  Peso:       ${formatKg(t.peso_kg)}`,
-    `💰 Valor/kg:   ${formatBRL(t.valor_kg)}`,
+    `📅 Data:         ${formatDate(t.data)}`,
+    `👤 ${parceiroLabel}:  ${t.parceiro_nome}`,
+    `📦 Material:     ${t.nome_material}`,
+    `⚖️  Peso:         ${formatKg(t.peso_kg)}`,
+    `💰 Valor/kg:     ${formatBRL(t.valor_kg)}`,
     '──────────────────────',
-    `💵 TOTAL:      ${formatBRL(t.valor_total)}`,
+    `💵 TOTAL:        ${formatBRL(t.valor_total)}`,
+    ...linhaVencimento(financeiros),
     '━━━━━━━━━━━━━━━━━━━━',
-  ].join('\n');
+  ];
+
+  return linhas.join('\n');
 }
 
 export async function compartilharRecibo(transacao) {
   try {
+    const financeiros = getFinanceiroByTransacao(transacao.id);
     await Share.share({
-      message: gerarTextoRecibo(transacao),
+      message: gerarTextoRecibo(transacao, financeiros),
     });
   } catch (_) {}
 }

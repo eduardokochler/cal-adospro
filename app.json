@@ -30,9 +30,10 @@
     "plugins": [
       "expo-sqlite"
     ],
+    "owner": "eduardokochlers-organization",
     "extra": {
       "eas": {
-        "projectId": "bd3550e3-175d-42de-bc39-9853157fa1b9"
+        "projectId": "9d4dd0a0-f73d-4928-ac4d-a17c8089e4cb"
       }
     }
   }
